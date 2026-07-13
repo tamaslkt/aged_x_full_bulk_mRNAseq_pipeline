@@ -1,0 +1,613 @@
+---
+title: "Ageing + X bulk mRNAseq (Functional enrichment analysis)"
+format: html
+author: Tamas Lakat
+---
+
+# Experiment
+
+The dataset contains bulk mRNA-sequencing data obtained from mouse heart samples (Young Control (YC; n=4), Aged Control (AC; n=4), Aged Treated (X; n=10))
+
+# Preprocessing pipeline
+
+1.  **Trimming + QC**
+    - Software: fastp
+    - Folders: 0_raw ->  1_trimmed
+2.  **QC**
+    - Software: fastqc, multiqc
+    - Folders: 1_trimmed -> 2_fastqc
+3.  **Pseudoalignment**
+    - Software: Kallisto
+    - Reference transcriptome version: Mus_musculus.GRCm39
+    - Folders: 2_fastqc + 3_reference -> 4_aligned
+
+# Install libraries
+
+```{r}
+#| label: Install libraries
+#| include: false
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("clusterProfiler")
+BiocManager::install("enrichplot")
+BiocManager::install("org.Mm.eg.db")
+BiocManager::install("biomaRt")
+BiocManager::install("ReactomePA")
+```
+
+# Import libraries
+
+```{r}
+#| label: Load libraries
+#| include: false
+
+library(msigdbr)
+library(org.Mm.eg.db)
+library(biomaRt)
+library(clusterProfiler)
+library(readr)
+library(tidyverse)
+library(dplyr)
+library(DESeq2)
+library(openxlsx)
+library(enrichplot)
+library(ReactomePA)
+library(DT)
+```
+
+# Functions
+
+## Numeric vector for ORA
+
+```{r}
+numeric_vector <- function(df, organism) { # df = DESeq2 results as df, organism: mouse = org.Mm.eg.db
+  df.significant <- df |>
+    dplyr::filter(
+      !is.na(padj),
+      padj < padj_threshold,
+      abs(log2FoldChange) > log2fc_threshold
+    )
+  
+  df.gene_entrezid <- AnnotationDbi::select(
+    organism,
+    keys = rownames(df.significant),
+    columns = "ENTREZID",
+    keytype = "SYMBOL"
+  )
+  
+  df.gene_entrezid <- df.gene_entrezid |>
+    dplyr::filter(!is.na(ENTREZID))
+  
+  df.significant$SYMBOL <- rownames(df.significant)
+  
+  df.mapped <- dplyr::inner_join(
+    df.significant,
+    df.gene_entrezid,
+    by = "SYMBOL"
+  )
+  
+  df.gene_list <- df.mapped$log2FoldChange
+  names(df.gene_list) <- df.mapped$ENTREZID
+  
+  return(df.gene_list)
+}
+```
+
+## Ranked gene list for GSEA
+
+```{r}
+ranked_gene_list <- function(df) { # df = DESeq2 results as df
+  df.ranked <- df %>%
+    as.data.frame() %>%
+    mutate(
+      symbol = rownames(.),
+      rank_metric = sign(log2FoldChange) * -log10(padj)
+    )
+
+  ranked_genes <- df.ranked$rank_metric
+  names(ranked_genes) <- df.ranked$symbol
+
+  ranked_genes <- sort(ranked_genes, decreasing = TRUE)
+
+  return(ranked_genes)
+}
+```
+
+## List top 10 pos and top 10 neg GSEA results
+
+```{r}
+# Perform GSEA
+gsea_top20 <- function(res.GSEA) { # GSEA results
+
+  res.GSEA.df <- as_tibble(res.GSEA@result) %>%
+    mutate(
+      direction = ifelse(NES > 0, "positive", "negative"),
+      neglog10_padj = -log10(p.adjust),
+    )
+
+  top_positive <- res.GSEA.df %>%
+    filter(NES > 0) %>%
+    arrange(desc(NES)) %>%
+    slice_head(n = 10)
+
+  top_negative <- res.GSEA.df %>%
+    filter(NES < 0) %>%
+    arrange(NES) %>%
+    slice_head(n = 10)
+
+  top20 <- bind_rows(top_positive, top_negative) %>%
+    mutate(ID = reorder(ID, NES))
+
+  return(top20)
+}
+```
+
+# Load DEGs
+
+```{r}
+aged_vs_young <- readRDS("./DEGs/aged_vs_young.rds")
+x_vs_aged <- readRDS("./DEGs/x_vs_aged.rds")
+
+aged_vs_young.df <- as.data.frame(aged_vs_young)
+x_vs_aged.df <- as.data.frame(x_vs_aged)
+```
+
+# Overrepresentation analysis (ORA)
+
+## Create gene list (numeric vectors for cnet plot, Check Functions) (or try keyType = "SYMBOL" and simply use symbol instead of ENTREZID)
+
+```{r}
+log2fc_threshold <- 1.5
+padj_threshold <- 0.05
+
+# numeric_vector (df, organism) df = DESeq2 results as df, organism: mouse = org.Mm.eg.db
+aged_vs_young.gene_list <- numeric_vector(aged_vs_young.df, org.Mm.eg.db)
+x_vs_aged.gene_list <- numeric_vector(x_vs_aged.df, org.Mm.eg.db)
+
+# Overlap
+overlapping_genes <- intersect(names(aged_vs_young.gene_list), names(x_vs_aged.gene_list))
+```
+
+## KEGG
+
+```{r}
+# Obtain KEGG results
+aged_vs_young.kegg <- enrichKEGG(
+  gene = names(aged_vs_young.gene_list), 
+  organism = 'mmu',  # mmu for mouse, hsa for human
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH")
+
+x_vs_aged.kegg <- enrichKEGG(
+  gene = names(x_vs_aged.gene_list), 
+  organism = 'mmu',  # mmu for mouse, hsa for human
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH")
+
+overlap.kegg <- enrichKEGG(
+  gene = overlapping_genes, 
+  organism = 'mmu',  # mmu for mouse, hsa for human
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH")
+
+# Visualize KEGG results
+aged_vs_young.kegg.dotplot <- dotplot(aged_vs_young.kegg) + ggtitle("KEGG: Aged vs Young")
+x_vs_aged.kegg.dotplot <- dotplot(x_vs_aged.kegg) + ggtitle("KEGG: x vs Aged")
+overlap.kegg.dotplot <- dotplot(overlap.kegg) + ggtitle("KEGG: Overlap")
+
+aged_vs_young.kegg.dotplot
+x_vs_aged.kegg.dotplot
+overlap.kegg.dotplot
+```
+
+```{r}
+dir.create("./ORA")
+
+ggsave("./ORA/aged_vs_young_ora_kegg.png", aged_vs_young.kegg.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/x_vs_aged_ora_kegg.png", x_vs_aged.kegg.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/overlap_ora_kegg.png", overlap.kegg.dotplot, width = 8, height = 8, bg = 'white')
+```
+
+## GO
+
+```{r}
+# Set gene set size thresholds
+minGSSize = 15
+maxGSSize = 300
+
+# Obtain go results
+aged_vs_young.go <- enrichGO(
+  gene = names(aged_vs_young.gene_list),
+  OrgDb = org.Mm.eg.db,
+  ont = 'BP', # Choose ALL, BP, MF, CC
+  pvalueCutoff = 0.05,
+  minGSSize = minGSSize,
+  maxGSSize = maxGSSize)
+
+x_vs_aged.go <- enrichGO(
+  gene = names(x_vs_aged.gene_list),
+  OrgDb = org.Mm.eg.db,
+  ont = 'BP', # Choose ALL, BP, MF, CC
+  pvalueCutoff = 0.05,
+  minGSSize = minGSSize,
+  maxGSSize = maxGSSize)
+
+overlap.go <- enrichGO(
+  gene = overlapping_genes,
+  OrgDb = org.Mm.eg.db,
+  ont = 'BP', # Choose ALL, BP, MF, CC
+  pvalueCutoff = 0.05,
+  minGSSize = minGSSize,
+  maxGSSize = maxGSSize)
+
+# Visualize GO results
+aged_vs_young.go.dotplot <- dotplot(aged_vs_young.go) + ggtitle("GOBP: Aged vs Young")
+x_vs_aged.go.dotplot <- dotplot(x_vs_aged.go) + ggtitle("GOBP: x vs Aged")
+overlap.go.dotplot <- dotplot(overlap.go) + ggtitle("GOBP: Overlap")
+
+aged_vs_young.go.dotplot
+x_vs_aged.go.dotplot
+overlap.go.dotplot
+```
+
+```{r}
+ggsave("./ORA/aged_vs_young_ora_gobp.png", aged_vs_young.go.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/x_vs_aged_ora_gobp.png", x_vs_aged.go.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/overlap_ora_gobp.png", overlap.go.dotplot, width = 8, height = 8, bg = 'white')
+```
+
+### Enrich plot
+
+```{r}
+# Obtain emap results
+aged_vs_young.go.emap <- pairwise_termsim(aged_vs_young.go)
+x_vs_aged.go.emap <- pairwise_termsim(x_vs_aged.go)
+overlap.go.emap <- pairwise_termsim(overlap.go)
+
+# Visualize emap
+aged_vs_young.go.emapplot <- emapplot(aged_vs_young.go.emap) + ggtitle("GOBP: Aged vs Young")
+x_vs_aged.go.emapplot <- emapplot(x_vs_aged.go.emap) + ggtitle("GOBP: x vs Aged")
+overlap.go.emapplot <- emapplot(overlap.go.emap) + ggtitle("GOBP: Overlap")
+
+aged_vs_young.go.emapplot
+x_vs_aged.go.emapplot
+overlap.go.emapplot
+```
+
+```{r}
+ggsave("./ORA/aged_vs_young_ora_go_emap.png", aged_vs_young.go.emapplot, width = 10, height = 10, bg = 'white')
+ggsave("./ORA/x_vs_aged_ora_go_emap.png", x_vs_aged.go.emapplot, width = 10, height = 10, bg = 'white')
+ggsave("./ORA/overlap_ora_go_emap.png", overlap.go.emapplot, width = 10, height = 10, bg = 'white')
+```
+
+### Cnet plot
+
+```{r}
+# Convert to readable gene symbols
+aged_vs_young.go.symbol <- setReadable(aged_vs_young.go, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+x_vs_aged.go.symbol <- setReadable(x_vs_aged.go, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+overlap.go.symbol <- setReadable(overlap.go, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+
+# Visualize cnet
+aged_vs_young.go.cnetplot <- cnetplot(aged_vs_young.go.symbol, categorySize="pvalue", color.params = list(foldChange=aged_vs_young.gene_list))
+x_vs_aged.go.cnetplot <- cnetplot(x_vs_aged.go.symbol, categorySize="pvalue", color.params = list(foldChange=x_vs_aged.gene_list))
+overlap.go.cnetplot <- cnetplot(overlap.go.symbol, categorySize="pvalue", color.params = list(foldChange=overlapping_genes))
+
+aged_vs_young.go.cnetplot <- aged_vs_young.go.cnetplot + ggtitle("GO: Aged vs Young")
+x_vs_aged.go.cnetplot <- x_vs_aged.go.cnetplot + ggtitle("GO: x vs Aged")
+overlap.go.cnetplot <- overlap.go.cnetplot + ggtitle("GO: Overlap")
+
+aged_vs_young.go.cnetplot
+x_vs_aged.go.cnetplot
+overlap.go.cnetplot
+```
+
+```{r}
+ggsave("./ORA/aged_vs_young_ora_go_cnet.png", aged_vs_young.go.cnetplot, width = 10, height = 10, bg = 'white')
+ggsave("./ORA/x_vs_aged_ora_go_cnet.png", x_vs_aged.go.cnetplot, width = 10, height = 10, bg = 'white')
+ggsave("./ORA/overlap_ora_go_cnet.png", overlap.go.cnetplot, width = 10, height = 10, bg = 'white')
+```
+
+### Upset plot
+
+```{r}
+upsetplot(aged_vs_young.go)
+upsetplot(x_vs_aged.go)
+upsetplot(overlap.go)
+```
+
+## Reactome
+
+```{r}
+minGSSize = 15
+maxGSSize = 300
+
+# Obtain Reactome results
+aged_vs_young.reactome <- enrichPathway(
+  gene = names(aged_vs_young.gene_list),
+  organism = 'mouse',
+  pvalueCutoff = 0.05,
+  minGSSize = minGSSize,
+  maxGSSize = maxGSSize)
+
+x_vs_aged.reactome <- enrichPathway(
+  gene = names(x_vs_aged.gene_list),
+  organism = 'mouse',
+  pvalueCutoff = 0.05,
+  minGSSize = minGSSize,
+  maxGSSize = maxGSSize)
+
+overlap.reactome <- enrichPathway(
+  gene = overlapping_genes,
+  organism = 'mouse',
+  pvalueCutoff = 0.05,
+  minGSSize = minGSSize,
+  maxGSSize = maxGSSize)
+
+# Visualize Reactome results
+aged_vs_young.reactome.dotplot <- dotplot(aged_vs_young.reactome) + ggtitle("Reactome: Aged vs Young")
+x_vs_aged.reactome.dotplot <- dotplot(x_vs_aged.reactome) + ggtitle("Reactome: x vs Aged")
+overlap.reactome.dotplot <- dotplot(overlap.reactome) + ggtitle("Reactome: Overlap")
+
+aged_vs_young.reactome.dotplot
+x_vs_aged.reactome.dotplot
+overlap.reactome.dotplot
+```
+
+```{r}
+ggsave("./ORA/aged_vs_young_ora_reactome.png", aged_vs_young.reactome.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/x_vs_aged_ora_reactome.png", x_vs_aged.reactome.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/overlap_ora_reactome.png", overlap.reactome.dotplot, width = 8, height = 8, bg = 'white')
+```
+
+## Hallmark
+
+```{r}
+msigdb_data <- msigdbr(species = "Mus musculus", collection = "H")
+msigdb_data.entrez <- dplyr::select(msigdb_data, gs_name, ncbi_gene)
+
+minGSSize = 15
+maxGSSize = 300
+
+# Obtain Hallmark results
+aged_vs_young.hallmark <- enricher(gene = names(aged_vs_young.gene_list), TERM2GENE = msigdb_data.entrez, minGSSize = minGSSize, maxGSSize = maxGSSize)
+x_vs_aged.hallmark <- enricher(gene = names(x_vs_aged.gene_list), TERM2GENE = msigdb_data.entrez, minGSSize = minGSSize, maxGSSize = maxGSSize)
+overlap.hallmark <- enricher(gene = overlapping_genes, TERM2GENE = msigdb_data.entrez, minGSSize = minGSSize, maxGSSize = maxGSSize)
+
+# Visualize Hallmark results
+aged_vs_young.hallmark.dotplot <- dotplot(aged_vs_young.hallmark) + ggtitle("Hallmark: Aged vs Young")
+x_vs_aged.hallmark.dotplot <- dotplot(x_vs_aged.hallmark) + ggtitle("Hallmark: x vs Aged")
+overlap.hallmark.dotplot <- dotplot(overlap.hallmark) + ggtitle("Hallmark: Overlap")
+
+aged_vs_young.hallmark.dotplot
+x_vs_aged.hallmark.dotplot
+overlap.hallmark.dotplot
+```
+
+```{r}
+ggsave("./ORA/aged_vs_young_ora_hallmark.png", aged_vs_young.hallmark.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/x_vs_aged_ora_hallmark.png", x_vs_aged.hallmark.dotplot, width = 8, height = 8, bg = 'white')
+ggsave("./ORA/overlap_ora_hallmark.png", overlap.hallmark.dotplot, width = 8, height = 8, bg = 'white')
+```
+
+# Gene Set Enrichment Analysis (GSEA)
+
+## Load databases
+
+```{r}
+# Load gene sets (password and registration required -> download manually from https://www.gsea-msigdb.org/gsea/msigdb/mouse/collections.jsp)
+GO <- read.gmt("./Supplement/Databases/m5.go.v2024.1.Mm.symbols.gmt")
+GOBP <- read.gmt("./Supplement/Databases/m5.go.bp.v2024.1.Mm.symbols.gmt")
+Reactome <- read.gmt("./Supplement/Databases/m2.all.v2024.1.Mm.symbols.gmt")
+Hallmark <- read.gmt("./Supplement/Databases/mh.all.v2024.1.Mm.symbols.gmt")
+```
+
+## Create ranked gene list (Check Functions)
+
+```{r}
+# ranked_gene_list(df) df = DESeq2 results as df
+aged_vs_young.ranked_genes <- ranked_gene_list(aged_vs_young.df)
+x_vs_aged.ranked_genes <- ranked_gene_list(x_vs_aged.df)
+```
+
+## Perform GSEA
+
+```{r}
+GENE_SET = GOBP
+minGSSize = 15
+maxGSSize = 300
+
+aged_vs_young.GSEA <- GSEA(
+    aged_vs_young.ranked_genes,
+    TERM2GENE = GENE_SET,
+    minGSSize = minGSSize,
+    maxGSSize = maxGSSize,
+    verbose = FALSE,
+    eps = 0
+  )
+
+x_vs_aged.GSEA <- GSEA(
+    x_vs_aged.ranked_genes,
+    TERM2GENE = GENE_SET,
+    minGSSize = minGSSize,
+    maxGSSize = maxGSSize,
+    verbose = FALSE,
+    eps = 0
+  )
+```
+
+## Create interactive data table
+
+```{r}
+# Transform GSEA results into dataframe
+aged_vs_young.GSEA.df <- as_tibble(aged_vs_young.GSEA@result)
+x_vs_aged.GSEA.df <- as_tibble(x_vs_aged.GSEA@result)
+
+aged_vs_young.GSEA.datatable <- datatable(aged_vs_young.GSEA.df,
+                                                extensions = c('KeyTable', 'FixedHeader'),
+                                                caption = 'Signatures enriched by Aging',
+                                                options = list(keys = TRUE, searchHighlight = TRUE, pageLength = 10, lengthMenu = c('10', '25', '50', '100')))
+
+aged_vs_young.GSEA.datatable
+
+x_vs_aged.GSEA.datatable <- datatable(x_vs_aged.GSEA.df,
+                                                extensions = c('KeyTable', 'FixedHeader'),
+                                                caption = 'Signatures enriched by x',
+                                                options = list(keys = TRUE, searchHighlight = TRUE, pageLength = 10, lengthMenu = c('10', '25', '50', '100')))
+
+aged_vs_young.GSEA.datatable
+```
+
+## Obtain top 20 GSEA results (Check Functions)
+
+```{r}
+# ranked_gene_list(res.GSEA) res.GSEA  = GSEA results
+aged_vs_young.GSEA.top_20 <- gsea_top20(aged_vs_young.GSEA)
+x_vs_aged.GSEA.top_20 <- gsea_top20(x_vs_aged.GSEA)
+```
+
+## Plot top 20 GSEA results
+
+```{r}
+# Aged vs young
+aged_vs_young.GSEA.barplot <- ggplot(
+  aged_vs_young.GSEA.top_20,
+  aes(
+    x = NES,
+    y = ID,
+    fill = direction,
+    alpha = neglog10_padj
+  )
+) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(
+    values = c(
+      positive = "#FF4747",
+      negative = "steelblue"
+    )
+  ) +
+  scale_alpha_continuous(range = c(0.4, 1)) +
+  theme_bw() +
+  labs(
+    title = paste0(
+      "Top 10 Positive and Negative NES (Hallmark)\nin Aged vs Young"
+    ),
+    x = "Normalized Enrichment Score (NES)",
+    y = "",
+    fill = "Direction",
+    alpha = expression(-log[10](adj.~p))
+  )
+
+aged_vs_young.GSEA.barplot
+
+# x vs aged
+x_vs_aged.GSEA.barplot <- ggplot(
+  x_vs_aged.GSEA.top_20,
+  aes(
+    x = NES,
+    y = ID,
+    fill = direction,
+    alpha = neglog10_padj
+  )
+) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(
+    values = c(
+      positive = "#FF4747",
+      negative = "steelblue"
+    )
+  ) +
+  scale_alpha_continuous(range = c(0.4, 1)) +
+  theme_bw() +
+  labs(
+    title = paste0(
+      "Top 10 Positive and Negative NES (Hallmark)\nin x vs Aged"
+    ),
+    x = "Normalized Enrichment Score (NES)",
+    y = "",
+    fill = "Direction",
+    alpha = expression(-log[10](adj.~p))
+  )
+
+x_vs_aged.GSEA.barplot
+```
+
+```{r}
+dir.create("./GSEA")
+
+ggsave("./GSEA/aged_vs_young_gsea_hallmark.png", aged_vs_young.GSEA.barplot, width = 10, height = 6, bg = 'white')
+ggsave("./GSEA/x_vs_aged_gsea_hallmark.png", x_vs_aged.GSEA.barplot, width = 10, height = 6, bg = 'white')
+```
+
+## Export GSEA results
+
+```{r}
+# Create workbook
+wb2 <- createWorkbook()
+
+# List GSEA data frames
+GSEA.df.list <- list(
+  "Aged_vs_Young" = aged_vs_young.GSEA.df,
+  "x_vs_Aged" = x_vs_aged.GSEA.df
+)
+
+# Loop through the list and add each data frame as a new sheet
+for (sheet_name in names(GSEA.df.list)) {
+  addWorksheet(wb2, sheet_name)  # Create a new sheet
+  writeData(wb2, sheet = sheet_name, GSEA.df.list[[sheet_name]])  # Write data
+}
+
+# Save excel file
+saveWorkbook(wb2, "./GSEA/GSEA_results.xlsx", overwrite = TRUE)
+```
+
+# DEG barplots (from selected gene sets)
+
+```{r}
+GENE_SET = GOBP
+PATHWAY_NAME <- "GOBP_CORONARY_VASCULATURE_DEVELOPMENT"
+
+genes_in_pathway <- GENE_SET$gene[GENE_SET$term == PATHWAY_NAME]
+
+# Filter DESeq2 results for genes in this pathway
+pathway_results <- x_vs_aged[rownames(x_vs_aged) %in% genes_in_pathway, ]
+
+# Filter, sort, convert to data frame, and remove NA rows
+pathway_results.df <- x_vs_aged %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "gene") %>%
+  filter(gene %in% genes_in_pathway) %>%
+  arrange(desc(log2FoldChange)) %>%
+  filter(padj < 0.05) %>%
+  filter(abs(log2FoldChange) > 0.5) %>%
+  na.omit()
+
+# Convert gene column to a factor to preserve the order in the plot
+pathway_results.df <- pathway_results.df %>%
+  mutate(gene = factor(gene, levels = gene[order(log2FoldChange)]))
+
+# Create the bar plot
+pathway_results.barplot <- ggplot(pathway_results.df, aes(x = log2FoldChange, y = gene, fill = padj)) +
+  geom_bar(stat = "identity", color = "black") +
+  scale_fill_gradient(low = "#FF4747", high = "azure", na.value = "azure") +  # Adjust gradient colors for padj
+  labs(
+    x = "log2 Fold Change",
+    y = "",
+    fill = "Adjusted p-value",
+    title = paste0(PATHWAY_NAME, " (x vs Aged)")
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 10),  # Adjust y-axis gene label size
+    axis.text.x = element_text(size = 10),  # Adjust x-axis text size
+    legend.position = "right"
+  )
+
+pathway_results.barplot
+```
+
+```{r}
+ggsave("./DEGs/x_vs_aged_barplot_gobp_coronary_vasculature_development.png", pathway_results.barplot, width = 8, height = 8, bg = 'white')
+```

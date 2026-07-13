@@ -1,0 +1,32 @@
+[2026-07-13 22:08:42] [INFO]    [OmnipathR] Welcome to OmnipathR!
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] Reading JSON from `C:\Users\Tamas\AppData\Local\cache\OmnipathR/cache.json` (encoding: UTF-8).
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] JSON validation successful: TRUE
+[2026-07-13 22:08:42] [INFO]    [OmnipathR] Initialized cache: `C:\Users\Tamas\AppData\Local\cache\OmnipathR`.
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] Reading JSON from `C:/Users/Tamas/AppData/Local/R/win-library/4.4/OmnipathR/db/db_def.json` (encoding: UTF-8).
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] JSON validation successful: TRUE
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] Reading JSON from `C:/Users/Tamas/AppData/Local/R/win-library/4.4/OmnipathR/internal/magic_bytes.json` (encoding: UTF-8).
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] JSON validation successful: TRUE
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] Reading JSON from `C:/Users/Tamas/AppData/Local/R/win-library/4.4/OmnipathR/internal/urls.json` (encoding: UTF-8).
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] JSON validation successful: TRUE
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] Reading JSON from `C:/Users/Tamas/AppData/Local/R/win-library/4.4/OmnipathR/internal/id_types.json` (encoding: UTF-8).
+[2026-07-13 22:08:42] [TRACE]   [OmnipathR] JSON validation successful: TRUE
+[2026-07-13 22:08:52] [INFO]    [OmnipathR] Loading database `Ensembl and OMA organism names`.
+[2026-07-13 22:08:52] [INFO]    [OmnipathR] Looking up in cache `https://www.ensembl.org/info/about/species.html`: key=7332486db7400730697234bad76ca0c8e4d00799, latest version=1.
+[2026-07-13 22:08:52] [TRACE]   [OmnipathR] Cache file path: C:\Users\Tamas\AppData\Local\Cache\OmnipathR/7332486db7400730697234bad76ca0c8e4d00799-1.html
+[2026-07-13 22:08:52] [TRACE]   [OmnipathR] Looking up in cache: `https://omabrowser.org/All/oma-species.txt`.
+[2026-07-13 22:08:52] [TRACE]   [OmnipathR] Loaded data from RDS `C:\Users\Tamas\AppData\Local\Cache\OmnipathR/30e690cbb55dfc63b5903ab337f34ffc2f4be397-1.rds`.
+[2026-07-13 22:08:52] [INFO]    [OmnipathR] Loaded database `Ensembl and OMA organism names`.
+[2026-07-13 22:08:52] [TRACE]   [OmnipathR] Looking up in cache: `https://omnipathdb.org/interactions?genesymbols=yes&datasets=collectri&organisms=10090&dorothea_levels=A,B&fields=evidences,sources,references,curation_effort&loops=yes&license=academic`
+[2026-07-13 22:08:52] [TRACE]   [OmnipathR] Loaded data from RDS `C:\Users\Tamas\AppData\Local\Cache\OmnipathR/107896962c7d5fc50d4cbc51809a591cd50bb105-1.rds`.
+[2026-07-13 22:08:52] [INFO]    [OmnipathR] Loaded from cache: `https://omnipathdb.org/interactions?genesymbols=yes&datasets=collectri&organisms=10090&dorothea_levels=A,B&fields=evidences,sources,references,curation_effort&loops=yes&license=academic`
+[2026-07-13 22:08:52] [TRACE]   [OmnipathR] Converting JSON column `evidences` to list.
+[2026-07-13 22:08:54] [TRACE]   [OmnipathR] Restricting interaction records to datasets: collectri; and resources: any
+[2026-07-13 22:08:56] [TRACE]   [OmnipathR] Filtering evidence columns: positive, negative, directed, undirected; to datasets: collectri; and resources: any; excluding resources: none
+[2026-07-13 22:09:45] [SUCCESS] [OmnipathR] Downloaded 40291 interactions.
+[2026-07-13 22:09:53] [TRACE]   [OmnipathR] Looking up in cache: `https://omnipathdb.org/interactions?genesymbols=yes&datasets=collectri&organisms=10090&dorothea_levels=A,B&fields=evidences,sources,references,curation_effort&loops=yes&license=academic`
+[2026-07-13 22:09:53] [TRACE]   [OmnipathR] Loaded data from RDS `C:\Users\Tamas\AppData\Local\Cache\OmnipathR/107896962c7d5fc50d4cbc51809a591cd50bb105-1.rds`.
+[2026-07-13 22:09:53] [INFO]    [OmnipathR] Loaded from cache: `https://omnipathdb.org/interactions?genesymbols=yes&datasets=collectri&organisms=10090&dorothea_levels=A,B&fields=evidences,sources,references,curation_effort&loops=yes&license=academic`
+[2026-07-13 22:09:53] [TRACE]   [OmnipathR] Converting JSON column `evidences` to list.
+[2026-07-13 22:09:54] [TRACE]   [OmnipathR] Restricting interaction records to datasets: collectri; and resources: any
+[2026-07-13 22:09:56] [TRACE]   [OmnipathR] Filtering evidence columns: positive, negative, directed, undirected; to datasets: collectri; and resources: any; excluding resources: none
+[2026-07-13 22:10:42] [SUCCESS] [OmnipathR] Downloaded 40291 interactions.

@@ -1,0 +1,13 @@
+{
+	"n_targets": 116873,
+	"n_bootstraps": 0,
+	"n_processed": 27141441,
+	"n_pseudoaligned": 23823610,
+	"n_unique": 10603670,
+	"p_pseudoaligned": 87.8,
+	"p_unique": 39.1,
+	"kallisto_version": "0.46.2",
+	"index_version": 10,
+	"start_time": "Tue Nov 25 19:50:08 2025",
+	"call": "kallisto quant -i /mnt/d/dsandme/bulk/data/reference/kallisto/mouse_transcriptome.idx -o /mnt/d/dsandme/bulk/data/aligned/14-NMN_S30 --bias --threads=8 --rf-stranded 14-NMN_S30_R1_001.trim.fastq.gz 14-NMN_S30_R2_001.trim.fastq.gz"
+}

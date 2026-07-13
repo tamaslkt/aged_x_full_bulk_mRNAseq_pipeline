@@ -1,0 +1,700 @@
+---
+title: "Ageing + X bulk mRNAseq (DEGs)"
+format: html
+author: Tamas Lakat
+---
+
+# Experiment
+
+The dataset contains bulk mRNA-sequencing data obtained from mouse heart samples (Young Control (YC; n=4), Aged Control (AC; n=4), Aged Treated (X; n=10))
+
+# Preprocessing pipeline
+
+1.  **Trimming + QC**
+    - Software: fastp
+    - Folders: 0_raw ->  1_trimmed
+2.  **QC**
+    - Software: fastqc, multiqc
+    - Folders: 1_trimmed -> 2_fastqc
+3.  **Pseudoalignment**
+    - Software: Kallisto
+    - Reference transcriptome version: Mus_musculus.GRCm39
+    - Folders: 2_fastqc + 3_reference -> 4_aligned
+
+# Install libraries
+
+```{r}
+#| label: Install libraries
+#| include: false
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("DESeq2")
+BiocManager::install("EnhancedVolcano")
+BiocManager::install("tximport")
+BiocManager::install("TxDb.Mmusculus.UCSC.mm10.knownGene")
+BiocManager::install("biomaRt")
+BiocManager::install("sva")
+BiocManager::install("msigdbr", force = TRUE)
+```
+
+# Import libraries
+
+```{r}
+#| label: Load libraries
+#| include: false
+
+library(ggplot2)
+library(tximport)
+library(readr)
+library(biomaRt)
+library(tidyverse)
+library(dplyr)
+library(DESeq2)
+library(EnhancedVolcano)
+library(openxlsx)
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+library(ComplexHeatmap)
+library(colorRamp2)
+library(ragg)
+library(clusterProfiler)
+```
+
+# Functions
+
+## Create color vectors for volcano plot
+
+```{r}
+color_vector <- function(df, log2FC = 1.5, alpha = 0.05) {
+  
+  keyvals <- rep("grey", nrow(df))
+  names(keyvals) <- rep("NS", nrow(df))  # ← rep() to give every element its own "NS" name
+  
+  valid <- !is.na(df$log2FoldChange) & !is.na(df$padj)
+  
+  up <- valid & df$log2FoldChange > log2FC & df$padj < alpha
+  keyvals[up] <- "#FF4747"
+  names(keyvals)[up] <- "Upregulated"
+  
+  down <- valid & df$log2FoldChange < -log2FC & df$padj < alpha
+  keyvals[down] <- "steelblue"
+  names(keyvals)[down] <- "Downregulated"
+  
+  return(keyvals)
+}
+```
+
+## Check significance
+
+```{r}
+is_sig <- function(padj, lfc) {
+  (padj < 0.05 | padj == 0) & abs(lfc) > 1.5 & abs(lfc) < 10
+}
+```
+
+# Load data
+
+```{r}
+dds <- readRDS("./EDA/dds.Rds")
+```
+
+# Pairwise comparison
+
+```{r}
+# Pairwise comparison
+aged_vs_young <- results(dds, contrast=c("group", "Aged Control", "Young Control"))
+x_vs_aged <- results(dds, contrast=c("group", "Aged Treated", "Aged Control"))
+x_vs_young <- results(dds, contrast=c("group", "Aged Treated", "Young Control"))
+
+# Convert to df
+aged_vs_young.df <- as.data.frame(aged_vs_young)
+aged_vs_young.df <- aged_vs_young.df[!is.na(aged_vs_young.df$padj), ]
+
+x_vs_aged.df <- as.data.frame(x_vs_aged)
+x_vs_aged.df <- x_vs_aged.df[!is.na(x_vs_aged.df$padj), ]
+
+x_vs_young.df <- as.data.frame(x_vs_young)
+x_vs_young.df <- x_vs_young.df[!is.na(x_vs_young.df$padj), ]
+```
+
+```{r}
+# Save results
+dir.create("./DEGs")
+saveRDS(aged_vs_young, file = "./DEGs/aged_vs_young.rds")
+saveRDS(x_vs_aged, file = "./DEGs/x_vs_aged.rds")
+```
+
+# Check statistics
+
+## FC distribution
+
+```{r}
+aged_vs_young.lfc.df <- data.frame(
+  log2FC = aged_vs_young$log2FoldChange
+)
+
+aged_vs_young.lfc.hist <- ggplot(aged_vs_young.lfc.df, aes(x = log2FC)) +
+  geom_histogram(
+    bins = 50,
+    fill = "#FF4747",
+    color = "black"
+  ) +
+  labs(
+    title = "Log2 Fold Changes Distribution (Aged vs Young)",
+    x = "Log2 Fold Change",
+    y = "Gene count"
+  ) +
+  theme_bw()
+
+aged_vs_young.lfc.hist
+
+x_vs_aged.lfc.df <- data.frame(
+  log2FC = x_vs_aged$log2FoldChange
+)
+
+x_vs_aged.lfc.hist <- ggplot(x_vs_aged.lfc.df, aes(x = log2FC)) +
+  geom_histogram(
+    bins = 50,
+    fill = "#FF4747",
+    color = "black"
+  ) +
+  labs(
+    title = "Log2 Fold Changes Distribution (x vs Aged)",
+    x = "Log2 Fold Change",
+    y = "Gene count"
+  ) +
+  theme_bw()
+
+x_vs_aged.lfc.hist
+```
+
+```{r}
+ggsave("./DEGs/aged_vs_young_lfc_hist.png", aged_vs_young.lfc.hist, width = 8, height = 4, bg = 'white')
+ggsave("./DEGs/x_vs_aged_lfc_hist.png", x_vs_aged.lfc.hist, width = 8, height = 4, bg = 'white')
+```
+
+## Padj distribution
+
+```{r}
+aged_vs_young.padj.df <- data.frame(
+  padj = aged_vs_young$padj
+)
+
+aged_vs_young.padj.hist <- ggplot(aged_vs_young.padj.df, aes(x = padj)) +
+  geom_histogram(
+    bins = 50,
+    fill = "#FF4747",
+    color = "black"
+  ) +
+  labs(
+    title = "Adjusted P Distribution (Aged vs Young)",
+    x = "padj",
+    y = "Gene count"
+  ) +
+  theme_bw()
+
+aged_vs_young.padj.hist
+
+x_vs_aged.padj.df <- data.frame(
+  padj = x_vs_aged$padj
+)
+
+x_vs_aged.padj.hist <- ggplot(x_vs_aged.padj.df, aes(x = padj)) +
+  geom_histogram(
+    bins = 50,
+    fill = "#FF4747",
+    color = "black"
+  ) +
+  labs(
+    title = "Adjusted P Distribution (x vs Aged)",
+    x = "padj",
+    y = "Gene count"
+  ) +
+  theme_bw()
+
+x_vs_aged.padj.hist
+```
+
+```{r}
+ggsave("./DEGs/aged_vs_young_padj_hist.png", aged_vs_young.padj.hist, width = 8, height = 4, bg = 'white')
+ggsave("./DEGs/x_vs_aged_padj_hist.png", x_vs_aged.padj.hist, width = 8, height = 4, bg = 'white')
+```
+
+# Volcano plot
+
+```{r}
+# Define the significance threshold
+alpha <- 0.05
+log2FC <- 1.5
+
+# Create a custom color vector based on log2 fold change and p-value (Check Functions!)
+aged_vs_young.keyvals <- color_vector(aged_vs_young.df)
+x_vs_aged.keyvals <- color_vector(x_vs_aged.df)
+x_vs_young.keyvals <- color_vector(x_vs_young.df)
+  
+# Create the volcano plot
+# Aged vs young
+aged_vs_young.volcano <- EnhancedVolcano(aged_vs_young.df,
+                                            lab = rownames(aged_vs_young.df),
+                                            x = "log2FoldChange",
+                                            y = "padj",
+                                            pCutoff = alpha,
+                                            FCcutoff = log2FC,
+                                            pointSize = 3.0,
+                                            labSize = 3.0,
+                                            xlim = c(-8, 8),
+                                            ylim = c(0, 10),
+                                            title = "Aged vs Young",
+                                            subtitle = NULL,
+                                            caption = NULL,
+                                            gridlines.major = FALSE,
+                                            gridlines.minor = FALSE,
+                                            colCustom = aged_vs_young.keyvals
+                                          )
+
+
+
+aged_vs_young.volcano
+
+# x vs aged
+x_vs_aged.volcano <- EnhancedVolcano(x_vs_aged.df,
+                                            lab = rownames(x_vs_aged.df),
+                                            x = "log2FoldChange",
+                                            y = "padj",
+                                            pCutoff = alpha,
+                                            FCcutoff = log2FC,
+                                            pointSize = 3.0,
+                                            labSize = 3.0,
+                                            xlim = c(-8, 8),
+                                            ylim = c(0, 10),
+                                            title = "x vs Aged",
+                                            subtitle = NULL,
+                                            caption = NULL,
+                                            gridlines.major = FALSE,
+                                            gridlines.minor = FALSE,
+                                            colCustom = x_vs_aged.keyvals
+                                          )
+
+
+x_vs_aged.volcano
+
+# x vs young
+x_vs_young.volcano <- EnhancedVolcano(x_vs_young.df,
+                                            lab = rownames(x_vs_young.df),
+                                            x = "log2FoldChange",
+                                            y = "padj",
+                                            pCutoff = alpha,
+                                            FCcutoff = log2FC,
+                                            pointSize = 3.0,
+                                            labSize = 3.0,
+                                            xlim = c(-8, 8),
+                                            ylim = c(0, 10),
+                                            title = "x vs Young",
+                                            subtitle = NULL,
+                                            caption = NULL,
+                                            gridlines.major = FALSE,
+                                            gridlines.minor = FALSE,
+                                            colCustom = x_vs_young.keyvals
+                                          )
+
+
+x_vs_young.volcano
+```
+
+```{r}
+ggsave("./DEGs/volcano_aged_vs_young.png", aged_vs_young.volcano, width = 8, height = 8, bg = 'white', dpi = 300)
+ggsave("./DEGs/volcano_x_vs_aged.png", x_vs_aged.volcano, width = 8, height = 8, bg = 'white', dpi = 300)
+ggsave("./DEGs/volcano_x_vs_young.png", x_vs_young.volcano, width = 8, height = 8, bg = 'white', dpi = 300)
+```
+
+# Export DEGs
+
+## Create DEGs df (sorted)
+
+```{r}
+# Aged vs young
+aged_vs_young.df.significant <- aged_vs_young.df %>%
+  tibble::rownames_to_column("symbol") %>%
+  filter(!is.na(padj), !is.na(log2FoldChange)) %>%
+  filter(padj < 0.05) %>%
+  arrange(desc(log2FoldChange))
+
+rownames(aged_vs_young.df.significant) <- aged_vs_young.df.significant$symbol
+
+# x vs aged
+x_vs_aged.df.significant <- x_vs_aged.df %>%
+  tibble::rownames_to_column("symbol") %>%
+  filter(!is.na(padj), !is.na(log2FoldChange)) %>%
+  filter(padj < 0.05) %>%
+  arrange(desc(log2FoldChange))
+
+rownames(x_vs_aged.df.significant) <- x_vs_aged.df.significant$symbol
+
+
+```
+
+## Export to excel
+
+```{r}
+# Create a new Excel workbook
+wb <- createWorkbook()
+
+# List of data frames and corresponding sheet names
+df_list <- list(
+  "Aged_vs_Young" = aged_vs_young.df.significant,
+  "x_vs_Aged" = x_vs_aged.df.significant
+)
+
+# Loop through the list and add each data frame as a new sheet
+for (sheet_name in names(df_list)) {
+  addWorksheet(wb, sheet_name)  # Create a new sheet
+  writeData(wb, sheet = sheet_name, df_list[[sheet_name]])  # Write data
+}
+
+# Save the workbook as an Excel file
+saveWorkbook(wb, "./DEGs/DEGs_filtered.xlsx", overwrite = TRUE)
+```
+
+# Barplots
+
+```{r}
+# Aged_vs_young
+## Filter top 20 DEGs
+aged_vs_young.top_pos <- head(aged_vs_young.df.significant, 10)
+aged_vs_young.top_neg <- tail(aged_vs_young.df.significant, 10)
+aged_vs_young.top_20 <- bind_rows(aged_vs_young.top_pos, aged_vs_young.top_neg)
+
+## Create barplot
+aged_vs_young.top_20.barplot <- ggplot(aged_vs_young.top_20, aes(x = log2FoldChange, y=reorder(rownames(aged_vs_young.top_20), log2FoldChange), fill = padj)) +
+  geom_bar(stat = "identity", color = "black") +
+  scale_fill_gradient(low = "#FF4747", high = "azure", na.value = "azure") +
+  labs(
+    x = "log2 Fold Change",
+    y = "Gene",
+    fill = "Adjusted p-value",
+    title = "Top 20 DEGs (Aged vs Young)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 10),  # Adjust y-axis gene label size
+    axis.text.x = element_text(size = 10),  # Adjust x-axis text size
+    legend.position = "right"
+  )
+  
+aged_vs_young.top_20.barplot
+
+## x vs aged
+x_vs_aged.top_pos <- head(x_vs_aged.df.significant, 10)
+x_vs_aged.top_neg <- tail(x_vs_aged.df.significant, 10)
+x_vs_aged.top_20 <- bind_rows(x_vs_aged.top_pos, x_vs_aged.top_neg)
+
+## Create barplot
+x_vs_aged.top_20.barplot <- ggplot(x_vs_aged.top_20, aes(x = log2FoldChange, y=reorder(rownames(x_vs_aged.top_20), log2FoldChange), fill = padj)) +
+  geom_bar(stat = "identity", color = "black") +
+  scale_fill_gradient(low = "#FF4747", high = "azure", na.value = "azure") +
+  labs(
+    x = "log2 Fold Change",
+    y = "Gene",
+    fill = "Adjusted p-value",
+    title = "Top 20 DEGs (x vs Aged)"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.y = element_text(size = 10),  # Adjust y-axis gene label size
+    axis.text.x = element_text(size = 10),  # Adjust x-axis text size
+    legend.position = "right"
+  )
+  
+x_vs_aged.top_20.barplot
+```
+
+```{r}
+ggsave("./DEGs/barplot_top20_aged_vs_young.png", aged_vs_young.top_20.barplot, width = 8, height = 8, bg = 'white')
+ggsave("./DEGs/barplot_top20_x_vs_aged.png", x_vs_aged.top_20.barplot, width = 8, height = 8, bg = 'white')
+```
+
+# Scatterplot (Pearson correlation)
+
+```{r}
+# Get the union of significant genes from both datasets
+union_genes <- union(aged_vs_young.df.significant$symbol, x_vs_aged.df.significant$symbol)
+
+# Only keep union genes that exist in each df
+aged_genes   <- intersect(union_genes, rownames(aged_vs_young.df))
+x_genes    <- intersect(union_genes, rownames(x_vs_aged.df))
+common_genes <- intersect(aged_genes, x_genes)  # genes present in both
+
+# Subset from filtered dataframes, not raw DESeqResults
+aged_vs_young.df.union <- aged_vs_young.df[common_genes, ]
+x_vs_aged.df.union   <- x_vs_aged.df[common_genes, ]
+
+# Now merge — same genes guaranteed, so suffix approach is safe
+scatter_data.merged <- merge(
+  aged_vs_young.df.union |> tibble::rownames_to_column("gene"),
+  x_vs_aged.df.union   |> tibble::rownames_to_column("gene"),
+  by = "gene", suffixes = c("_aged", "_x")
+)
+
+# Add a column to indicate significance
+scatter_data.merged$significance <- ifelse(
+  is_sig(scatter_data.merged$padj_aged, scatter_data.merged$log2FoldChange_aged) &
+    is_sig(scatter_data.merged$padj_x, scatter_data.merged$log2FoldChange_x),
+  "Both",
+  ifelse(
+    is_sig(scatter_data.merged$padj_aged, scatter_data.merged$log2FoldChange_aged),
+    "Aged",
+    ifelse(
+      is_sig(scatter_data.merged$padj_x, scatter_data.merged$log2FoldChange_x),
+      "x",
+      "None"
+    )
+  )
+)
+
+scatter_data.merged <- scatter_data.merged[scatter_data.merged$significance!="None", ]
+
+scatter_data.merged[is.na(scatter_data.merged)] <- 0
+
+# Scatter plot with Pearson correlation
+scatterplot.pearson <- ggplot(scatter_data.merged, aes(x = log2FoldChange_aged, y = log2FoldChange_x, color = significance)) +
+  geom_point(size = 3.5, alpha = 0.6) +  
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +  
+  
+  annotate("text", x = max(scatter_data.merged$log2FoldChange_aged) - 5, 
+           y = max(scatter_data.merged$log2FoldChange_x) - 3, 
+           label = paste("Pearson R =", round(cor(scatter_data.merged$log2FoldChange_aged, 
+                                                 scatter_data.merged$log2FoldChange_x), 2),
+                         "\np-value ", format.pval(cor.test(scatter_data.merged$log2FoldChange_aged, 
+                                                            scatter_data.merged$log2FoldChange_x)$p.value, 
+                                                   digits = 3)),
+           size = 7, color = "black", hjust = 0) +  
+  
+  geom_vline(xintercept = c(-1.5, 1.5), linetype = "dashed", color = "darkgrey", linewidth = 0.4) +  
+  geom_hline(yintercept = c(-1.5, 1.5), linetype = "dashed", color = "darkgrey", linewidth = 0.4) +  
+  geom_vline(xintercept = c(-0, 0), color = "black", linewidth = 0.2) +  
+  geom_hline(yintercept = c(-0, 0), color = "black", linewidth = 0.2) +  
+  labs(title = "",
+       x = "log2FoldChange (Aged vs Young)",
+       y = "log2FoldChange (x vs Aged)") +
+  scale_color_manual(values = c("Aged" = "lightblue", "x" = "steelblue", "Both" = "#FF4747", "None" = "gray")) +  
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 22, face = "bold"),  
+    axis.line = element_line(color = "black", linewidth = 0.8),  
+    axis.text = element_text(size = 22),  
+    axis.title = element_text(size = 24),  
+    legend.text = element_text(size = 22),
+    legend.key.spacing.y = unit(0.2, "cm")
+  ) +
+  guides(color = guide_legend(title = NULL))  
+
+
+scatterplot.pearson
+```
+
+```{r}
+ggsave("./DEGs/scatterplot_pearson.png", scatterplot.pearson, width = 12, height = 12, bg = 'white', dpi = 300)
+```
+
+## Heatmap of correlating genes
+
+```{r}
+# Transform dds (variance stabilization)
+vsd <- vst(dds, blind = FALSE)
+
+# Extract significant genes labeled as "Both"
+both <- scatter_data.merged$gene[scatter_data.merged$significance == "Both"]
+both <- intersect(both, rownames(vsd))
+
+# Subset count matrix for these genes
+both.matrix <- assay(vsd)[both, ]
+
+# Ensure no missing genes (remove NA rows)
+both.matrix <- both.matrix[complete.cases(both.matrix), ]
+
+# Z-score normalization
+both.matrix.z <- t(scale(t(both.matrix)))
+
+# Define the desired sample order
+desired_order <- c("YC1", "YC2", "YC3", "YC4",
+                   "AC1", "AC2", "AC3", "AC4",
+                   "X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10")
+
+# Ensure only available samples are used
+desired_order <- intersect(desired_order, colnames(both.matrix.z))
+
+# Reorder the columns in the matrix based on the specified order
+both.matrix.z <- both.matrix.z[, desired_order]
+
+# Create heatmap with your preferred styling
+both.matrix.z.heatmap <- Heatmap(
+  both.matrix.z, 
+  cluster_rows = TRUE, 
+  cluster_columns = FALSE, 
+  col = colorRamp2(c(-2, 0, 2), c("steelblue", "white", "#FF4747")),  # Color scheme
+  show_row_dend = FALSE,    # Hide row dendrogram
+  show_column_dend = FALSE, # Hide column dendrogram
+  show_heatmap_legend = TRUE,
+  heatmap_legend_param = list(
+    title = "z-score",  
+    title_gp = gpar(fontsize = 14),  
+    labels_gp = gpar(fontsize = 12)  
+  ),
+  rect_gp = gpar(col = "white", lwd = 1),  # Add white grid
+  column_names_gp = gpar(fontsize = 10),  # Adjust column names font size
+  row_names_gp = gpar(fontsize = 10),  # Adjust row names font size
+  row_names_max_width = unit(35, "cm")  # Set max row name width
+)
+
+both.matrix.z.heatmap
+```
+
+```{r}
+tryCatch({
+    # Open the device
+    png("DEGs/correlating_genes_heatmap.png", 
+        width = 1600,
+        height = 3600,
+        res = 300)
+    
+    # Calculate and Draw
+    print("Drawing heatmap...")
+    ComplexHeatmap::draw(both.matrix.z.heatmap)
+    
+    # Force the device to save
+    dev.off()
+    print("File saved successfully!")
+    
+}, error = function(e) {
+    print(paste("Error caught:", e$message))
+    if(!is.null(dev.list())) dev.off()
+})
+
+```
+
+# Protein-protein interaction
+
+## Export gene list
+
+```{r}
+x_vs_aged.significant.gene_list <- x_vs_aged.df.significant %>%
+  filter(abs(log2FoldChange) > 1.5) %>%
+  dplyr::select(symbol)
+
+dir.create("./PPI")
+write.table(x_vs_aged.significant.gene_list, file = "./PPI/signif_gene_list_x_vs_aged.txt", sep = "\t", row.names = FALSE)
+```
+
+## Import STRING network dataframe
+
+```{r}
+# Read STRING analysis results
+x_vs_aged.string <- read.csv("./PPI/x_vs_aged_10plus_degree_proteins.csv", sep = ",")
+
+x_vs_aged.string.degree <- as.data.frame(x_vs_aged.string) %>%
+  dplyr::select(display.name, Degree) %>%
+  na.omit()
+
+x_vs_aged.topdegree_genes <- x_vs_aged.string.degree$display.name[x_vs_aged.string.degree$Degree>9]
+```
+
+## Heatmap of top degree genes
+
+```{r}
+# Extract valid genes
+x_vs_aged.topdegree_genes <- intersect(x_vs_aged.topdegree_genes, rownames(vsd))
+
+# Subset count matrix for these genes
+x_vs_aged.topdegree_genes.matrix <- assay(vsd)[x_vs_aged.topdegree_genes, ]
+
+# Ensure no missing genes (remove NA rows)
+x_vs_aged.topdegree_genes.matrix <- x_vs_aged.topdegree_genes.matrix[complete.cases(x_vs_aged.topdegree_genes.matrix), ]
+
+# Z-score normalization
+x_vs_aged.topdegree_genes.matrix.z <- t(scale(t(x_vs_aged.topdegree_genes.matrix)))
+
+# Define the desired sample order
+desired_order <- c("YC1", "YC2", "YC3", "YC4",
+                   "AC1", "AC2", "AC3", "AC4",
+                   "X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10")
+
+# Ensure only available samples are used
+desired_order <- intersect(desired_order, colnames(x_vs_aged.topdegree_genes.matrix.z))
+
+# Reorder the columns in the matrix based on the specified order
+x_vs_aged.topdegree_genes.matrix.z <- x_vs_aged.topdegree_genes.matrix.z[, desired_order]
+
+# Create heatmap with your preferred styling
+x_vs_aged.topdegree_genes.matrix.z.heatmap <- Heatmap(
+  x_vs_aged.topdegree_genes.matrix.z, 
+  cluster_rows = TRUE, 
+  cluster_columns = FALSE, 
+  col = colorRamp2(c(-2, 0, 2), c("steelblue", "white", "#FF4747")),  # Color scheme
+  show_row_dend = FALSE,    # Hide row dendrogram
+  show_column_dend = FALSE, # Hide column dendrogram
+  show_heatmap_legend = TRUE,
+  heatmap_legend_param = list(
+    title = "z-score",  
+    title_gp = gpar(fontsize = 14),  
+    labels_gp = gpar(fontsize = 12)  
+  ),
+  rect_gp = gpar(col = "white", lwd = 1),  # Add white grid
+  column_names_gp = gpar(fontsize = 10),  # Adjust column names font size
+  row_names_gp = gpar(fontsize = 10),  # Adjust row names font size
+  row_names_max_width = unit(35, "cm")  # Set max row name width
+)
+
+x_vs_aged.topdegree_genes.matrix.z.heatmap
+```
+
+```{r}
+tryCatch({
+    # Open the device
+    png("PPI/x_vs_aged_topdegree_genes_heatmap.png", 
+        width = 2000,
+        height = 2000,
+        res = 300)
+    
+    # Calculate and Draw
+    print("Drawing heatmap...")
+    ComplexHeatmap::draw(x_vs_aged.topdegree_genes.matrix.z.heatmap)
+    
+    # Force the device to save
+    dev.off()
+    print("File saved successfully!")
+    
+}, error = function(e) {
+    print(paste("Error caught:", e$message))
+    if(!is.null(dev.list())) dev.off()
+})
+
+```
+
+## ORA of top degree genes
+
+```{r}
+# Set gene set size thresholds
+minGSSize = 15
+maxGSSize = 300
+
+# Obtain go results
+x_vs_aged_topdegree_genes.go <- enrichGO(
+  gene = x_vs_aged.topdegree_genes,
+  OrgDb = org.Mm.eg.db,
+  ont = 'ALL', # Choose ALL, BP, MF, CC
+  pvalueCutoff = 0.05,
+  minGSSize = minGSSize,
+  maxGSSize = maxGSSize,
+  keyType = "SYMBOL")
+
+# Visualize GO results
+x_vs_aged_topdegree_genes.go.dotplot <- dotplot(x_vs_aged_topdegree_genes.go) + ggtitle("GO: x vs Aged Topdegree Genes")
+
+x_vs_aged_topdegree_genes.go.dotplot
+```
+
+```{r}
+ggsave("./PPI/x_vs_aged_topdegree_genes_ora_go.png", x_vs_aged_topdegree_genes.go.dotplot, width = 8, height = 8, bg = 'white')
+```

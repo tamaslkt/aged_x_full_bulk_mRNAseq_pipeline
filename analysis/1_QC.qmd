@@ -1,0 +1,484 @@
+---
+title: "Ageing + X bulk mRNAseq (QC)"
+format: html
+author: Tamas Lakat
+---
+
+# Experiment
+
+The dataset contains bulk mRNA-sequencing data obtained from mouse heart samples (Young Control (YC; n=4), Aged Control (AC; n=4), Aged Treated (X; n=10))
+
+# Preprocessing pipeline
+
+1.  **Trimming + QC**
+    - Software: fastp
+    - Folders: 0_raw ->  1_trimmed
+2.  **QC**
+    - Software: fastqc, multiqc
+    - Folders: 1_trimmed -> 2_fastqc
+3.  **Pseudoalignment**
+    - Software: Kallisto
+    - Reference transcriptome version: Mus_musculus.GRCm39
+    - Folders: 2_fastqc + 3_reference -> 4_aligned
+
+# Install libraries
+
+```{r}
+#| label: Install libraries
+#| include: false
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("DESeq2")
+BiocManager::install("EnhancedVolcano")
+BiocManager::install("tximport")
+BiocManager::install("TxDb.Mmusculus.UCSC.mm10.knownGene")
+BiocManager::install("biomaRt")
+BiocManager::install("sva")
+BiocManager::install("msigdbr", force = TRUE)
+```
+
+# Import libraries
+
+```{r}
+#| label: Load libraries
+#| include: false
+
+library(ggplot2)
+library(reshape2)
+library(tximport)
+library(readr)
+library(biomaRt)
+library(tidyverse)
+library(dplyr)
+library(DESeq2)
+library(EnhancedVolcano)
+library(openxlsx)
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+library(tibble)
+```
+
+# Functions
+
+## Aggregate by symbol names
+
+```{r}
+aggregate_by_rownames <- function(mat) { # mat = txi matrix
+  # Convert to dataframe and move rownames to a column
+  df <- as.data.frame(mat) %>%
+    rownames_to_column(var = "Gene") %>%
+    group_by(Gene) %>%
+    summarise(across(everything(), ~sum(as.numeric(.), na.rm = TRUE)), .groups = "drop") %>%
+    column_to_rownames(var = "Gene")  # Convert back to rownames
+  
+  return(as.matrix(df))  # Ensure it remains a matrix
+}
+```
+
+## Top 20 PCA loadings
+
+```{r}
+prepare_top_loadings <- function(loadings_vector, top_n = 20) { # loadings_vector = e.g. dds.vsd.pca$rotation[, "PC1"]
+  
+  top_genes <- head(
+    loadings_vector[order(abs(loadings_vector), decreasing = TRUE)],
+    top_n
+  )
+  
+  df <- data.frame(
+    gene = names(top_genes),
+    loading = as.numeric(top_genes)
+  )
+  
+  df$gene <- factor(df$gene, levels = df$gene[order(df$loading)])
+  
+  return(df)
+}
+```
+
+# Create raw count matrix
+
+## Obtain raw counts
+
+```{r}
+#| warning: false
+# Set directory
+kallisto_dir <- "../data/4_aligned"
+
+# List all abundance files
+samples <- list.files(kallisto_dir, full.names = TRUE)
+files <- file.path(samples, "abundance.tsv")
+names(files) <- basename(samples)
+
+# Download up to date gene mapping
+ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+tx2gene <- getBM(attributes = c("ensembl_transcript_id", "ensembl_gene_id"),
+                       mart = ensembl)
+# Save the new mapping
+dir.create("./Supplement")
+write_tsv(tx2gene, "./Supplement/tx2gene_mouse.tsv", col_names = FALSE)
+
+# Reload it
+tx2gene <- read_tsv("./Supplement/tx2gene_mouse.tsv", col_names = c("TXNAME", "GENEID"))
+tx2gene$TXNAME <- sub("\\..*", "", tx2gene$TXNAME)
+
+# Import Kallisto quantifications (RAW)----------------------------------------
+txi.raw <- tximport(files, type = "kallisto", tx2gene = tx2gene, 
+                countsFromAbundance = "no", 
+                ignoreTxVersion = TRUE)
+```
+
+## Translate Ensembl ID to gene symbols
+
+```{r}
+# Get gene symbols
+refseq_ids <- as.list(rownames(txi.raw$counts))
+refseq_ids <- unlist(refseq_ids)
+
+mouse_ensembl <- useEnsembl(biomart = "ensembl", dataset = "mmusculus_gene_ensembl")
+
+attributes <- c("ensembl_gene_id", "external_gene_name", "gene_biotype")
+
+gene_symbols <- getBM(attributes = attributes,
+                      filters = "ensembl_gene_id",
+                      values = refseq_ids,
+                      mart = mouse_ensembl)
+
+txi.raw$counts <- txi.raw$counts[rownames(txi.raw$counts) %in% gene_symbols$ensembl_gene_id, ]
+txi.raw$abundance <- txi.raw$abundance[rownames(txi.raw$abundance) %in% gene_symbols$ensembl_gene_id, ]
+txi.raw$length <- txi.raw$length[rownames(txi.raw$length) %in% gene_symbols$ensembl_gene_id, ]
+
+# Add gene symbols
+txi.raw$counts <- cbind(symbol = gene_symbols$external_gene_name[match(rownames(txi.raw$counts), gene_symbols$ensembl_gene_id)], 
+                          id = rownames(txi.raw$counts), 
+                          txi.raw$counts)
+
+txi.raw$abundance <- cbind(symbol = gene_symbols$external_gene_name[match(rownames(txi.raw$abundance), gene_symbols$ensembl_gene_id)], 
+                             id = rownames(txi.raw$abundance), 
+                             txi.raw$abundance)
+
+txi.raw$length <- cbind(symbol = gene_symbols$external_gene_name[match(rownames(txi.raw$length), gene_symbols$ensembl_gene_id)], 
+                          id = rownames(txi.raw$length), 
+                          txi.raw$length)
+
+# Remove 'id' column
+txi.raw$counts <- txi.raw$counts[, colnames(txi.raw$counts) != "id"]
+txi.raw$abundance <- txi.raw$abundance[, colnames(txi.raw$abundance) != "id"]
+txi.raw$length <- txi.raw$length[, colnames(txi.raw$length) != "id"]
+
+# Set rownames (symbol)
+rownames(txi.raw$counts) <- txi.raw$counts[, "symbol"]
+rownames(txi.raw$abundance) <- txi.raw$abundance[, "symbol"]
+rownames(txi.raw$length) <- txi.raw$length[, "symbol"]
+
+txi.raw$counts <- txi.raw$counts[, colnames(txi.raw$counts) != "symbol"]
+txi.raw$abundance <- txi.raw$abundance[, colnames(txi.raw$abundance) != "symbol"]
+txi.raw$length <- txi.raw$length[, colnames(txi.raw$length) != "symbol"]
+
+# Aggregate counts, abundance, and length
+txi.raw$counts <- aggregate_by_rownames(txi.raw$counts)
+txi.raw$abundance <- aggregate_by_rownames(txi.raw$abundance)
+txi.raw$length <- aggregate_by_rownames(txi.raw$length)
+```
+
+## Filter samples
+
+```{r}
+# Filter unwanted samples
+unwanted_samples <- c("YC3", "X2") # Outlier based on PCA and heatmap
+
+txi.raw$counts <- txi.raw$counts[, !colnames(txi.raw$counts) %in% unwanted_samples]
+txi.raw$abundance <- txi.raw$abundance[, !colnames(txi.raw$abundance) %in% unwanted_samples]
+txi.raw$length <- txi.raw$length[, !colnames(txi.raw$length) %in% unwanted_samples]
+```
+
+## Filter genes
+
+```{r}
+# Filter unwanted genes 
+keep_rows <- !grepl("^(Gm|Rpl)", rownames(txi.raw$counts))
+
+# Apply the filter to all txi components
+txi.raw$counts    <- txi.raw$counts[keep_rows, ]
+txi.raw$abundance <- txi.raw$abundance[keep_rows, ]
+txi.raw$length    <- txi.raw$length[keep_rows, ]
+```
+
+# Load metadata
+
+```{r}
+colData <- readxl::read_excel("./Supplement/metadata.xlsx")
+
+# Filter samples
+colData <- colData[-c(3, 10), ]
+
+# Add rownames
+rownames(colData) <- colData$sample
+
+# Reorder to match txi matrix colnames
+colData <- colData[colnames(txi.raw$counts), ]
+```
+
+# Create DESeq2 object
+
+```{r}
+dds.object <- DESeqDataSetFromTximport(txi.raw, colData, ~group)
+
+# Filter out low read counts
+smallestGroupSize <- 3
+keep <- rowSums(counts(dds.object) >= 10) >= smallestGroupSize
+dds.object <- dds.object[keep,]
+```
+
+# Check statistics
+
+## Lib sizes
+
+```{r}
+lib_size <- data.frame(
+  sample = colnames(counts(dds.object)),
+  lib_size = colSums(counts(dds.object)) / 1e6
+)
+
+lib_size.barplot <- ggplot(lib_size, aes(x = sample, y = lib_size)) +
+  geom_col(fill = "#FF4747") +
+  labs(y = "Million reads") +
+  labs(x = NULL) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+lib_size.barplot
+```
+
+```{r}
+dir.create("./EDA")
+ggsave("./EDA/library_sizes.png", lib_size.barplot, width = 8, height = 4, bg = 'white')
+```
+
+## Detected genes
+
+```{r}
+detected_genes <- data.frame(
+  sample = names(colSums(counts(dds.object) > 10)),
+  genes = as.numeric(colSums(counts(dds.object) > 10))
+)
+
+detected_genes.barplot <- ggplot(detected_genes, aes(x = sample, y = genes)) +
+  geom_col(fill = "#FF4747") +
+  labs(y = "Genes with >10 counts") +
+  labs(x = NULL) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+detected_genes.barplot
+```
+
+```{r}
+ggsave("./EDA/detected_genes.png", detected_genes.barplot, width = 8, height = 4, bg = 'white')
+```
+
+## Count distribution
+
+```{r}
+log_counts.long <- as.data.frame(counts(dds.object)) |>
+  rownames_to_column("gene") |>
+  pivot_longer(
+    -gene,
+    names_to = "sample",
+    values_to = "count"
+  ) |>
+  mutate(log_count = log10(count + 1))
+
+count_dist.boxplot <- ggplot(log_counts.long, aes(x = sample, y = log_count)) +
+  geom_boxplot(
+    outlier.shape = NA,
+    fill = "#FF4747"
+  ) +
+  labs(
+    x = NULL,
+    y = "log10(counts + 1)"
+  ) +
+  theme_bw() +
+  ylim(0, 5) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1)
+  )
+
+count_dist.boxplot
+```
+
+```{r}
+ggsave("./EDA/count_distribution.png", count_dist.boxplot, width = 8, height = 4, bg = 'white')
+```
+
+# Run DESeq2
+
+```{r}
+# Run DESeq2 
+dds <- DESeq(dds.object)
+
+# Save object
+saveRDS(dds, file = "./EDA/dds.rds")
+```
+
+# Check statistics
+
+## Density plot
+
+```{r}
+# Transform dds (variance stabilization for EDA)
+vsd <- vst(dds, blind = FALSE)
+
+# Get matrix
+vsd_mat <- assay(vsd)
+
+# Create df for density plot
+density.df <- melt(vsd_mat)
+colnames(density.df) <- c("gene", "sample", "expression")
+
+density.df$group <- colData(vsd)$group[density.df$sample]
+
+density_plot <- ggplot(density.df, aes(x = expression, group = sample, color = group)) +
+  geom_density(alpha = 0.3, linewidth = 0.6) +
+  theme_bw() +
+  labs(
+    title = "Sample-specific density of VST expression",
+    x = "VST expression",
+    y = "Density"
+  )
+
+density_plot
+```
+
+```{r}
+ggsave("./EDA/density_plot.png", density_plot, width = 8, height = 4, bg = 'white')
+```
+
+## Dispersion plot
+
+```{r}
+plotDispEsts(dds)
+```
+
+# PCA (with variance stabilization)
+
+```{r}
+# Run PCA
+dds.vsd.pca <- prcomp(t(vsd_mat), scale. = FALSE)
+
+# Create a data frame with PCA results
+dds.vsd.pca.df <- as.data.frame(dds.vsd.pca$x)
+dds.vsd.pca.df$sample <- rownames(dds.vsd.pca.df)  # Add sample names
+
+# Add metadata
+dds.vsd.pca.df <- dds.vsd.pca.df %>%
+  dplyr::left_join(colData %>% dplyr::select(sample, group, sex), by = c("sample" = "sample")) # adjust according to metadata columns
+  
+colnames(dds.vsd.pca.df)[18] <- "Group"
+
+# Plot PCA
+dds.vsd.pca.plot <- ggplot(dds.vsd.pca.df, aes(x = PC1, y = PC2, label = sample, color = Group, fill = Group)) +
+  geom_point(shape = 21, size = 6, stroke = 0.5) + 
+  
+  geom_text(vjust = -2, show.legend = FALSE, color = "grey40", size = 5) +
+  theme_minimal() +
+  
+  scale_color_manual(values = c("#9B111E", "#00072D", "grey60")) + 
+  scale_fill_manual(values = c("#FF4747", "steelblue", "grey")) + 
+  
+  theme(
+    text = element_text(size = 24),        
+    axis.title = element_text(size = 24),    
+    axis.text = element_text(size = 22),    
+    legend.text = element_text(size = 22),  
+    legend.title = element_text(size = 24),
+    legend.key.spacing.y = unit(0.2, "cm")
+  )
+
+dds.vsd.pca.plot
+
+# YC7 and X2 might be an outlier -> filter above
+```
+
+```{r}
+ggsave("./EDA/PCA_filtered.png", dds.vsd.pca.plot, width = 12, height = 12, bg = 'white', dpi = 300)
+```
+
+## Examine top variables
+
+```{r}
+# Obtain loadings
+loadings <- dds.vsd.pca$rotation
+
+# Top genes positively and negatively contributing to PC1
+top_PC1_df <- prepare_top_loadings(loadings[, "PC1"], top_n = 20)
+
+# Barplot
+top_PC1.barplot <- ggplot(top_PC1_df, aes(x = gene, y = loading, fill = loading > 0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("steelblue", "#FF4747"), guide = FALSE) +
+  labs(title = "Top PC1 genes (Aged vs Young)", x = "Gene", y = "Loading") +
+  theme_minimal()
+
+top_PC1.barplot
+
+# Top genes positively and negatively contributing to PC2
+top_PC2_df <- prepare_top_loadings(loadings[, "PC2"], top_n = 20)
+
+# Barplot
+top_PC2.barplot <- ggplot(top_PC2_df, aes(x = gene, y = loading, fill = loading > 0)) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  scale_fill_manual(values = c("steelblue", "#FF4747"), guide = FALSE) +
+  labs(title = "Top PC2 genes (Aged vs Young)", x = "Gene", y = "Loading") +
+  theme_minimal()
+
+top_PC2.barplot
+```
+
+```{r}
+ggsave("./EDA/PC1_barplot_filtered.png", top_PC1.barplot, width = 5, height = 5, bg = 'white')
+ggsave("./EDA/PC2_barplot_filtered.png", top_PC2.barplot, width = 5, height = 5, bg = 'white')
+```
+
+# Heatmap
+
+## Top variable genes heatmap
+
+```{r}
+vars <- apply(assay(vsd), 1, var)
+top_genes <- head(order(vars, decreasing = TRUE), 500)
+
+pheatmap::pheatmap(
+  assay(vsd)[top_genes, ],
+  scale = "row",
+  show_rownames = FALSE
+)
+
+pheatmap::pheatmap(
+  assay(vsd)[top_genes, ],
+  scale = "row",
+  show_rownames = FALSE,
+  filename = "EDA/vst_top_variable_genes_heatmap.png",
+  width = 10,
+  height = 10
+)
+```
+
+## Correlation heatmap
+
+```{r}
+pheatmap::pheatmap(
+  cor(assay(vsd))
+  )
+
+pheatmap::pheatmap(
+  cor(assay(vsd)),
+  filename = "EDA/vst_correlation_heatmap.png",
+  width = 10,
+  height = 10
+  )
+```

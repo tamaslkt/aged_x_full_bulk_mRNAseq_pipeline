@@ -1,0 +1,380 @@
+---
+title: "Ageing + X bulk mRNAseq (Transcription factor analysis)"
+format: html
+author: Tamas Lakat
+---
+
+# Experiment
+
+The dataset contains bulk mRNA-sequencing data obtained from mouse heart samples (Young Control (YC; n=4), Aged Control (AC; n=4), Aged Treated (X; n=10))
+
+# Preprocessing pipeline
+
+1.  **Trimming + QC**
+    - Software: fastp
+    - Folders: 0_raw ->  1_trimmed
+2.  **QC**
+    - Software: fastqc, multiqc
+    - Folders: 1_trimmed -> 2_fastqc
+3.  **Pseudoalignment**
+    - Software: Kallisto
+    - Reference transcriptome version: Mus_musculus.GRCm39
+    - Folders: 2_fastqc + 3_reference -> 4_aligned
+
+# Install libraries
+
+```{r}
+#| label: Install libraries
+#| include: false
+
+
+if (!require("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("decoupleR")
+BiocManager::install("OmnipathR")
+```
+
+# Import libraries
+
+```{r}
+#| label: Load libraries
+#| include: false
+
+library(decoupleR)
+library(OmnipathR)
+library(tidyr)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+library(ComplexHeatmap)
+```
+
+# DecoupleR
+
+## Load data
+
+```{r}
+dds <- readRDS("./EDA/dds.Rds")
+```
+
+## TF activity heatmap
+
+```{r}
+vsd <- vst(dds, blind = TRUE)
+mat <- assay(vsd)
+
+net <- decoupleR::get_collectri(organism = 'mouse', 
+                                split_complexes = FALSE)
+
+sample_acts <- decoupleR::run_ulm(mat = mat, 
+                                  net = net, 
+                                  .source = 'source', 
+                                  .target = 'target',
+                                  .mor = 'mor', 
+                                  minsize = 5)
+
+sample_acts
+
+n_tfs <- 25
+
+# Transform to wide matrix
+sample_acts_mat <- sample_acts %>%
+  tidyr::pivot_wider(id_cols = 'condition', 
+                     names_from = 'source',
+                     values_from = 'score') %>%
+  tibble::column_to_rownames('condition') %>%
+  as.matrix()
+
+# Get top tfs with more variable means across clusters
+tfs <- sample_acts %>%
+  dplyr::group_by(source) %>%
+  dplyr::summarise(std = stats::sd(score)) %>%
+  dplyr::arrange(-abs(std)) %>%
+  head(n_tfs) %>%
+  dplyr::pull(source)
+
+sample_acts_mat <- sample_acts_mat[,tfs]
+
+# Scale per sample
+sample_acts_mat <- scale(sample_acts_mat)
+
+# Choose color palette
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu"))
+colors.use <- grDevices::colorRampPalette(colors = colors)(100)
+
+my_breaks <- c(seq(-2, 0, length.out = ceiling(100 / 2) + 1),
+               seq(0.05, 2, length.out = floor(100 / 2)))
+
+dir.create("./TF")
+
+# Plot
+
+pheatmap::pheatmap(mat = sample_acts_mat,
+                   color = colors.use,
+                   border_color = "white",
+                   breaks = my_breaks,
+                   cellwidth = 15,
+                   cellheight = 15,
+                   treeheight_row = 20,
+                   treeheight_col = 20)
+
+# Save heatmap
+pheatmap::pheatmap(mat = sample_acts_mat,
+                   color = colors.use,
+                   border_color = "white",
+                   breaks = my_breaks,
+                   treeheight_row = 20,
+                   treeheight_col = 20,
+                   filename = "TF/transcription_factors_heatmap.png",
+                   width = 10,
+                   height = 8 
+)
+```
+
+## TF activity barplot
+
+```{r}
+# Load pairwise comparison data
+aged_vs_young <- results(dds, contrast=c("group", "Aged Control", "Young Control"))
+x_vs_aged <- results(dds, contrast=c("group", "Aged Treated", "Aged Control"))
+
+# Convert to df
+aged_vs_young.df <- as.data.frame(aged_vs_young)
+aged_vs_young.df <- aged_vs_young.df[!is.na(aged_vs_young.df$padj), ]
+
+x_vs_aged.df <- as.data.frame(x_vs_aged)
+x_vs_aged.df <- x_vs_aged.df[!is.na(x_vs_aged.df$padj), ]
+
+# Run ulm
+DF = x_vs_aged.df
+contrast_acts <- decoupleR::run_ulm(mat = DF[, 'stat', drop = FALSE], 
+                                    net = net, 
+                                    .source = 'source', 
+                                    .target = 'target',
+                                    .mor='mor', 
+                                    minsize = 5)
+
+# Filter top TFs in both signs
+f_contrast_acts <- contrast_acts %>%
+  dplyr::mutate(rnk = NA)
+
+msk <- f_contrast_acts$score > 0
+
+f_contrast_acts[msk, 'rnk'] <- rank(-f_contrast_acts[msk, 'score'])
+f_contrast_acts[!msk, 'rnk'] <- rank(-abs(f_contrast_acts[!msk, 'score']))
+
+tfs <- f_contrast_acts %>%
+  dplyr::arrange(rnk) %>%
+  head(n_tfs) %>%
+  dplyr::pull(source)
+
+f_contrast_acts <- f_contrast_acts %>%
+  filter(source %in% tfs)
+
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu")[c(2, 10)])
+
+tf.barplot <- ggplot2::ggplot(data = f_contrast_acts, 
+                     mapping = ggplot2::aes(x = stats::reorder(source, score), 
+                                            y = score)) + 
+  ggplot2::geom_bar(mapping = ggplot2::aes(fill = score),
+                    color = "black",
+                    stat = "identity") +
+  ggplot2::scale_fill_gradient2(low = colors[1], 
+                                mid = "whitesmoke", 
+                                high = colors[2], 
+                                midpoint = 0) + 
+  ggplot2::theme_minimal() +
+  ggplot2::theme(axis.title = element_text(face = "bold", size = 12),
+                 axis.text.x = ggplot2::element_text(angle = 45, 
+                                                     hjust = 1, 
+                                                     size = 10, 
+                                                     face = "bold"),
+                 axis.text.y = ggplot2::element_text(size = 10, 
+                                                     face = "bold"),
+                 panel.grid.major = element_blank(), 
+                 panel.grid.minor = element_blank()) +
+  ggplot2::xlab("X vs Aged TFs")
+
+tf.barplot
+```
+
+```{r}
+ggsave("./TF/aged_vs_young_tf_barplot.png", tf.barplot, width = 8, height = 4, bg = 'white')
+```
+
+```{r}
+# Visualize genes belong to TF
+tf <- 'Nr3c1'
+
+df <- net %>%
+  dplyr::filter(source == tf) %>%
+  dplyr::arrange(target) %>%
+  dplyr::mutate(ID = target, color = "3") %>%
+  tibble::column_to_rownames('target')
+
+inter <- sort(dplyr::intersect(rownames(DF), rownames(DF)))
+
+df <- df[inter, ]
+
+df[, c('logfc', 't_value', 'p_value')] <- DF[inter, c('log2FoldChange', 'stat', 'pvalue')]
+
+df <- df %>%
+  dplyr::mutate(color = dplyr::if_else(mor > 0 & t_value > 0, '1', color)) %>%
+  dplyr::mutate(color = dplyr::if_else(mor > 0 & t_value < 0, '2', color)) %>%
+  dplyr::mutate(color = dplyr::if_else(mor < 0 & t_value > 0, '2', color)) %>%
+  dplyr::mutate(color = dplyr::if_else(mor < 0 & t_value < 0, '1', color))
+
+df_naomit <- na.omit(df)
+
+colors <- rev(RColorBrewer::brewer.pal(n = 11, name = "RdBu")[c(2, 10)])
+
+p2 <- ggplot2::ggplot(data = df, 
+                     mapping = ggplot2::aes(x = logfc, 
+                                            y = -log10(p_value), 
+                                            color = color,
+                                            size = abs(mor))) + 
+  ggplot2::geom_point(size = 2.5, 
+                      color = "black") + 
+  ggplot2::geom_point(size = 1.5) +
+  ggplot2::scale_colour_manual(values = c(colors[2], colors[1], "grey")) +
+  ggrepel::geom_label_repel(mapping = ggplot2::aes(label = ID,
+                                                   size = 1)) + 
+  ggplot2::theme_minimal() +
+  ggplot2::theme(legend.position = "none") +
+  ggplot2::geom_vline(xintercept = 0, linetype = 'dotted') +
+  ggplot2::geom_hline(yintercept = 0, linetype = 'dotted') +
+  ggplot2::ggtitle(tf)
+
+p2
+```
+
+```{r}
+ggsave("./TF/volcano_x_vs_aged_Nr3c1.png", p2, width = 8, height = 8, bg = 'white')
+```
+
+## Target genes heatmap
+
+```{r}
+# Get target name vector
+nr3c1_targets <- net$target[net$source=='Nr3c1']
+valid_targets <- intersect(nr3c1_targets, rownames(vsd))
+
+# Get heatmap matrix
+nr3c1_mat <- assay(vsd[valid_targets, ])
+nr3c1_mat <- t(scale(t(nr3c1_mat)))
+
+# Ensure only available samples are used
+desired_order <- intersect(desired_order, colnames(nr3c1_mat))
+
+# Reorder the columns in the matrix based on the specified order
+nr3c1_mat <- nr3c1_mat[, desired_order]
+
+# Get color vectors
+nr3c1_sig.df <- scatter_data.merged[scatter_data.merged$gene %in% rownames(nr3c1_mat), ]
+rownames(nr3c1_sig.df) <- nr3c1_sig.df$gene
+
+row_sig_labels <- scatter_data.merged$significance[match(rownames(nr3c1_mat), scatter_data.merged$gene)]
+row_sig_labels[is.na(row_sig_labels)] <- "0"
+
+row_color_map <- c("0" = "grey", "Aged" = "lightblue", "x" = "steelblue", "Both" = "#FF4747")
+row_colors <- row_color_map[row_sig_labels]
+row_colors[is.na(row_colors)] <- "grey"
+
+# Create heatmap with your preferred styling
+nr3c1_mat.heatmap <- Heatmap(
+  nr3c1_mat, 
+  cluster_rows = TRUE, 
+  cluster_columns = FALSE, 
+  col = colorRamp2(c(-2, 0, 2), c("steelblue", "white", "#FF4747")),
+  show_row_dend = FALSE,
+  show_column_dend = FALSE,
+  show_heatmap_legend = TRUE,
+  heatmap_legend_param = list(
+    title = "z-score",  
+    title_gp = gpar(fontsize = 14),  
+    labels_gp = gpar(fontsize = 12)  
+  ),
+  rect_gp = gpar(col = "white", lwd = 1),
+  column_names_gp = gpar(fontsize = 10),
+  row_names_gp = gpar(fontsize = 10, col = row_colors), 
+  row_names_max_width = unit(35, "cm")
+)
+
+nr3c1_mat.heatmap
+```
+
+```{r}
+tryCatch({
+    # Open the device
+    png("TF/Nr3c1_heatmap.png", 
+        width = 1600,
+        height = 4000,
+        res = 300)
+    
+    # Calculate and Draw
+    print("Drawing heatmap...")
+    ComplexHeatmap::draw(nr3c1_mat.heatmap)
+    
+    # Force the device to save
+    dev.off()
+    print("File saved successfully!")
+    
+}, error = function(e) {
+    print(paste("Error caught:", e$message))
+    if(!is.null(dev.list())) dev.off()
+})
+```
+
+### 'Both' target genes heatmap
+
+```{r}
+# Get Both genes
+is_both <- row_sig_labels == "Both"
+nr3c1_both_mat <- nr3c1_mat[is_both, ]
+
+# Create heatmap
+nr3c1_both.heatmap <- Heatmap(
+  nr3c1_both_mat, 
+  cluster_rows = TRUE, 
+  cluster_columns = FALSE, 
+  col = colorRamp2(c(-2, 0, 2), c("steelblue", "white", "#FF4747")),
+  show_row_dend = FALSE,
+  show_column_dend = FALSE,
+  show_heatmap_legend = TRUE,
+  heatmap_legend_param = list(
+    title = "z-score",  
+    title_gp = gpar(fontsize = 14),  
+    labels_gp = gpar(fontsize = 12)  
+  ),
+  rect_gp = gpar(col = "white", lwd = 1),
+  column_names_gp = gpar(fontsize = 10),
+  row_names_gp = gpar(fontsize = 10), 
+  row_names_max_width = unit(35, "cm"),
+  column_title = "Nr3c1 Targets: Significant in Both"
+)
+
+nr3c1_both.heatmap
+```
+
+```{r}
+tryCatch({
+    # Open the device
+    png("TF/Nr3c1_both_heatmap.png", 
+        width = 2000,
+        height = 1800,
+        res = 300)
+    
+    # Calculate and Draw
+    print("Drawing heatmap...")
+    ComplexHeatmap::draw(nr3c1_both.heatmap)
+    
+    # Force the device to save
+    dev.off()
+    print("File saved successfully!")
+    
+}, error = function(e) {
+    print(paste("Error caught:", e$message))
+    if(!is.null(dev.list())) dev.off()
+})
+```

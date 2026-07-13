@@ -1,0 +1,269 @@
+/* =========================================================
+   1. GLOBAL PRESENTATION SETTINGS & TITLE SLIDE
+   ========================================================= */
+
+/* Title Slide Centering */
+.reveal .slides section:first-of-type,
+.reveal .slides section.title-slide {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: center !important;
+  height: 100vh !important;
+  padding: 0 !important;
+  text-align: center !important;
+}
+
+/* =========================================================
+   2. BACKGROUND & OVERLAY
+   ========================================================= */
+
+.reveal .slide-background {
+  background-image: url("bg.png") !important;
+  background-size: cover !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+}
+
+/* White overlay for all slides EXCEPT title */
+.reveal .slide-background:not(:first-child)::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(255, 255, 255, 0.75);
+  z-index: 1;
+}
+
+/* =========================================================
+   3. GLOBAL LOGO
+   ========================================================= */
+
+.reveal::after {
+  content: "";
+  position: fixed;
+  top: 1.5vh;
+  right: 1.5vw;
+  width: 12vw;
+  max-width: 200px;
+  height: 8vh;
+  background: url("Fekvo_fekete.png") no-repeat center / contain;
+  z-index: 30;
+  pointer-events: none;
+}
+
+/* =========================================================
+   4. WORKSPACE & HEADERS
+   ========================================================= */
+
+.reveal .slides section:not(.title-slide) {
+  padding: 2vh 2vw !important;
+  height: 100% !important;
+  display: flex !important;
+  flex-direction: column;
+  justify-content: flex-start;
+  box-sizing: border-box;
+}
+
+/* Slide Titles */
+.reveal h2 {
+  margin-bottom: 2vh !important;
+  width: 95% !important;
+  text-align: left;
+  font-size: clamp(1.5rem, 4.5vh, 2.5rem) !important;
+  line-height: 1.1;
+}
+
+/* =========================================================
+   5. FIGURE FRAME SYSTEM
+   ========================================================= */
+
+.fig-container {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  align-items: center !important;
+  height: 100% !important;
+  width: 100% !important;
+  overflow: hidden !important;
+  min-height: 0 !important;
+}
+
+.fig-container img {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  object-fit: contain !important;
+  margin: 0 !important;
+}
+
+.fig-cap {
+  flex: 0 0 auto;
+  width: 100%;
+  text-align: center;
+  font-size: 1.8vh !important;
+  font-weight: 500;
+  line-height: 1.2;
+  padding-top: 4px;
+}
+
+/* =========================================================
+   6. GRID LAYOUTS
+   ========================================================= */
+
+.grid-1x2,
+.grid-1x3,
+.grid-2x2,
+.pca-layout,
+.tf-layout,
+.deg-table-layout {
+  width: 100%;
+  display: grid !important;
+  align-items: stretch !important;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+}
+
+/* 1x2 */
+.grid-1x2 {
+  grid-template-columns: 1fr 1fr !important;
+  gap: 25px;
+}
+
+/* 1x3 */
+.grid-1x3 {
+  grid-template-columns: 1fr 1fr 1fr !important;
+  gap: 15px;
+}
+
+/* 2x2 */
+.grid-2x2 {
+  grid-template-columns: 1fr 1fr !important;
+  grid-template-rows: 1fr 1fr !important;
+  gap: 20px;
+}
+
+.grid-2x2 > div {
+  display: flex !important;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.grid-2x2 img {
+  max-height: calc(100% - 2vh) !important;
+  object-fit: contain !important;
+}
+
+/* PCA Layout */
+.pca-layout {
+  grid-template-columns: 0.85fr 1.15fr;
+  gap: 20px;
+}
+
+.pca-layout > :first-child {
+  padding: 1vh 1vw;
+  box-sizing: border-box;
+}
+
+.pca-right-grid {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 10px;
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  padding-bottom: 1.2vh !important;
+  box-sizing: border-box;
+}
+
+/* TF Layout */
+.tf-layout {
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: 30px;
+}
+
+.tf-right-stack {
+  display: grid !important;
+  grid-template-rows: 1fr 1fr;
+  gap: 15px;
+}
+
+/* DEG Table Layout */
+.deg-table-layout {
+  grid-template-columns: 1.3fr 0.7fr;
+  gap: 20px;
+}
+
+/* =========================================================
+   7. TABLES & SCROLLING
+   ========================================================= */
+
+.table-scroll-container {
+  max-height: 100% !important; 
+  overflow: auto !important;
+  width: 100%;
+  min-width: 0;
+}
+
+.table-scroll-container table {
+  font-size: 1.4vh !important;
+  width: max-content !important;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.table-scroll-container td:first-child {
+  font-weight: bold;
+  color: #2c3e50;
+  text-align: left;
+}
+
+/* =========================================================
+   8. SLIDE FOOTER / FOOTNOTES
+   ========================================================= */
+
+.slide-footer {
+  flex: 0 0 auto;
+  margin-top: 0.8vh;
+  padding-top: 0.4vh;
+  border-top: 1px solid rgba(0, 0, 0, 0.15);
+  font-size: clamp(1.2vh, 1.5vw, 1.8vh); /* min 1.2vh, preferred 1.5vw, max 1.8vh */
+  line-height: 1.2;
+  color: #444;
+  width: 100%;
+  text-align: left;
+}
+
+.slide-footer p {
+  margin: 0;
+  opacity: 0.85;
+}
+
+/* Hide footer on title slide */
+.reveal .slides section.title-slide .slide-footer {
+  display: none !important;
+}
+
+.reveal .slides section:not(.title-slide) {
+  padding-bottom: 1.5vh !important;
+}
+
+/* =========================================================
+   9. MISC FIXES
+   ========================================================= */
+
+.reveal section img {
+  object-fit: contain;
+}
+
+.table-scroll-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.table-scroll-container::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 4px;
+}
