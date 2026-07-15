@@ -6,7 +6,7 @@ This repository contains an end-to-end bulk transcriptomics workflow, featuring 
 The workflow processes Illumina-platform mRNA-seq data obtained from mouse heart tissue across three conditions:
 * **Young Control** (YC, n = 4)
 * **Aged Control** (AC, n = 4)
-* **Aged Treated** (Treated, n = 10)
+* **Aged Treated** (X, n = 10)
 
 *Note: Because this data is currently under preparation for peer-reviewed publication, the name of the specific treatment is kept anonymous.*
 
