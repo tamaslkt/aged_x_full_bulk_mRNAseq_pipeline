@@ -14,6 +14,8 @@ The workflow processes Illumina-platform mRNA-seq data obtained from mouse heart
 
 ## Directory Structure
 ```text
+├── data/
+│   ├── 4_aligned/                        # Gene abundance matrices per sample
 ├── analysis/
 │   ├── 1_QC.qmd                          # Data normalization, PCA, and exploratory plots
 │   ├── 2_differential_gene_expression.qmd # DESeq2 modeling, custom volcanoes, data tables
